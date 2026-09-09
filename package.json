@@ -1,0 +1,12 @@
+{
+  "name": "trans-all",
+  "version": "0.1.0",
+  "private": true,
+  "description": "沉浸式网页翻译扩展（Chrome / Edge MV3）。扩展本身零运行时依赖，jsdom 只用于跑测试。",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

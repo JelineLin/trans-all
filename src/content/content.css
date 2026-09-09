@@ -1,0 +1,96 @@
+/* Trans All — 注入页面的译文样式。用 <font> 承载，站点 CSS 极少会命中它。 */
+
+font.ta-target {
+  display: block;
+  margin-top: 0.28em;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: none;
+  white-space: inherit;
+}
+
+/* 行内单元（链接、span 片段等）的译文跟在原文后面 */
+font.ta-target.ta-inline {
+  display: inline;
+  margin: 0 0 0 0.35em;
+}
+
+/* 替换模式下原文被包进这个容器 */
+font.ta-source {
+  display: none !important;
+}
+
+/* ---------------- 译文样式 ---------------- */
+
+font.ta-target.ta-style-dashed {
+  border-bottom: 1px dashed currentColor;
+  padding-bottom: 1px;
+}
+
+font.ta-target.ta-style-dotted {
+  border-bottom: 1px dotted currentColor;
+  padding-bottom: 1px;
+}
+
+font.ta-target.ta-style-quote {
+  border-left: 3px solid rgba(31, 111, 235, 0.55);
+  padding-left: 0.6em;
+}
+
+font.ta-target.ta-style-quote.ta-inline {
+  border-left: none;
+  padding-left: 0;
+  box-shadow: inset 2px 0 0 rgba(31, 111, 235, 0.55);
+}
+
+font.ta-target.ta-style-highlight {
+  background-color: rgba(255, 221, 87, 0.28);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+font.ta-target.ta-style-dim {
+  opacity: 0.72;
+}
+
+font.ta-target.ta-style-blur {
+  filter: blur(4px);
+  transition: filter 0.18s ease;
+}
+
+font.ta-target.ta-style-blur:hover {
+  filter: none;
+}
+
+/* ---------------- 状态 ---------------- */
+
+font.ta-target.ta-loading {
+  opacity: 0.55;
+  font-style: italic;
+  border-bottom: none;
+  animation: ta-fade 1.3s ease-in-out infinite;
+}
+
+@keyframes ta-fade {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.25; }
+}
+
+font.ta-target.ta-error {
+  color: #cf222e;
+  font-size: 0.9em;
+  opacity: 0.9;
+  border-bottom: none;
+  cursor: help;
+}
+
+@media (prefers-color-scheme: dark) {
+  font.ta-target.ta-error { color: #ff7b72; }
+  font.ta-target.ta-style-highlight { background-color: rgba(255, 221, 87, 0.16); }
+}
+
+@media print {
+  font.ta-target.ta-loading,
+  font.ta-target.ta-error { display: none !important; }
+}

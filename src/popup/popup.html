@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Trans All</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <span class="logo">译</span>
+      <span class="name">Trans All</span>
+      <span class="spacer"></span>
+      <button id="openOptions" class="link-btn" type="button">设置</button>
+    </header>
+
+    <main class="body">
+      <button id="toggle" class="primary" type="button" disabled>翻译此页面</button>
+      <p id="hint" class="hint">正在读取页面状态…</p>
+
+      <div class="field">
+        <label for="targetLang">目标语言</label>
+        <select id="targetLang"></select>
+      </div>
+
+      <div class="field">
+        <label for="displayMode">译文展示</label>
+        <select id="displayMode"></select>
+      </div>
+
+      <div class="field">
+        <label for="translationStyle">译文样式</label>
+        <select id="translationStyle"></select>
+      </div>
+
+      <div class="field">
+        <label for="provider">翻译服务</label>
+        <select id="provider"></select>
+      </div>
+
+      <div class="rules">
+        <label class="check">
+          <input type="checkbox" id="autoSite" />
+          <span>打开 <b id="hostAuto">此站点</b> 时自动翻译</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="neverSite" />
+          <span>从不翻译 <b id="hostNever">此站点</b></span>
+        </label>
+      </div>
+
+      <p id="error" class="error" hidden></p>
+    </main>
+
+    <footer class="foot">
+      <span>Alt+A 翻译整页</span>
+      <span class="spacer"></span>
+      <span>Alt+S 翻译选中文本</span>
+    </footer>
+
+    <script src="../shared/constants.js"></script>
+    <script src="../shared/lang.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

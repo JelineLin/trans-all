@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Trans All 设置</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="logo">译</span>
+      <h1>Trans All 设置</h1>
+      <span class="spacer"></span>
+      <span id="saveState" class="save-state"></span>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="providers" type="button">翻译服务</button>
+      <button class="tab" data-tab="general" type="button">翻译偏好</button>
+      <button class="tab" data-tab="sites" type="button">站点规则</button>
+      <button class="tab" data-tab="advanced" type="button">高级</button>
+    </nav>
+
+    <!-- ------------------------------ 翻译服务 ------------------------------ -->
+    <section class="panel active" data-panel="providers">
+      <div class="split">
+        <aside class="list">
+          <div class="list-head">
+            <span>已配置的服务</span>
+            <button id="addProvider" class="mini" type="button">+ 添加</button>
+          </div>
+          <ul id="providerList"></ul>
+          <p class="tip">
+            勾选左侧圆点即为当前使用的服务。API Key 只保存在本机浏览器
+            (<code>chrome.storage.local</code>)，不会同步或上传。
+          </p>
+        </aside>
+
+        <div class="editor">
+          <p id="emptyEditor" class="empty">从左侧选择一个服务，或点击「+ 添加」新建。</p>
+
+          <form id="providerForm" hidden>
+            <div class="row">
+              <label for="preset">预设模板</label>
+              <select id="preset"></select>
+            </div>
+            <p class="row-note">选择后会自动填好接口地址与默认模型，之后仍可手动修改。</p>
+
+            <div class="row">
+              <label for="pName">名称</label>
+              <input id="pName" type="text" placeholder="例如：工作用 Claude" />
+            </div>
+
+            <div class="row">
+              <label for="pType">接口类型</label>
+              <select id="pType"></select>
+            </div>
+
+            <div class="row">
+              <label for="pBaseUrl">接口地址</label>
+              <input id="pBaseUrl" type="text" spellcheck="false" placeholder="https://api.example.com/v1" />
+            </div>
+            <p class="row-note" id="baseUrlNote"></p>
+
+            <div class="row">
+              <label for="pApiKey">API Key</label>
+              <input id="pApiKey" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…" />
+              <button id="toggleKey" class="mini" type="button">显示</button>
+            </div>
+
+            <div class="row">
+              <label for="pModel">模型</label>
+              <input id="pModel" type="text" list="modelOptions" spellcheck="false" placeholder="模型名称" />
+              <datalist id="modelOptions"></datalist>
+              <button id="fetchModels" class="mini" type="button">拉取列表</button>
+            </div>
+            <p class="row-note" id="modelNote">
+              可直接输入任意模型名，下拉里的只是建议。点「拉取列表」向该服务查询当前真实可用的模型。
+            </p>
+
+            <div class="row">
+              <label for="pMaxTokens">最大输出</label>
+              <input id="pMaxTokens" type="number" min="256" max="128000" step="256" />
+              <span class="unit">tokens</span>
+            </div>
+
+            <div class="row" id="temperatureRow">
+              <label for="pTemperature">Temperature</label>
+              <input id="pTemperature" type="number" min="0" max="2" step="0.1" />
+              <span class="unit">留空表示不发送</span>
+            </div>
+            <p class="row-note" id="temperatureNote" hidden>
+              Claude Opus 5 / Opus 4.8 等模型已移除 <code>temperature</code>，传入会返回
+              400，因此 Anthropic 接口不发送该参数。
+            </p>
+
+            <details class="advanced-block">
+              <summary>附加请求头（可选）</summary>
+              <textarea id="pHeaders" rows="3" spellcheck="false"
+                placeholder='{"HTTP-Referer": "https://example.com"}'></textarea>
+              <p class="row-note">JSON 对象。OpenRouter 等服务可能需要额外的来源标识头。</p>
+            </details>
+
+            <div class="actions">
+              <button id="testProvider" class="secondary" type="button">测试连接</button>
+              <span class="spacer"></span>
+              <button id="deleteProvider" class="danger" type="button">删除</button>
+            </div>
+
+            <p id="testResult" class="test-result" hidden></p>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ 翻译偏好 ------------------------------ -->
+    <section class="panel" data-panel="general">
+      <div class="card">
+        <div class="row">
+          <label for="targetLang">目标语言</label>
+          <select id="targetLang"></select>
+        </div>
+        <div class="row">
+          <label for="displayMode">译文展示</label>
+          <select id="displayMode"></select>
+        </div>
+        <div class="row">
+          <label for="translationStyle">译文样式</label>
+          <select id="translationStyle"></select>
+        </div>
+        <div class="row">
+          <label for="triggerMode">划词翻译</label>
+          <select id="triggerMode"></select>
+        </div>
+        <div class="row">
+          <label for="customPrompt">补充指令</label>
+          <textarea id="customPrompt" rows="4"
+            placeholder="追加到系统提示词末尾，例如：术语「prompt」统一译为「提示词」；保持技术文档的正式语气。"></textarea>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>快捷键</h2>
+        <p class="row-note">
+          默认 <kbd>Alt</kbd>+<kbd>A</kbd> 翻译 / 还原整页，<kbd>Alt</kbd>+<kbd>S</kbd> 翻译选中文本。
+        </p>
+        <div class="actions">
+          <button id="openShortcuts" class="secondary" type="button">修改快捷键</button>
+          <span class="row-note" id="shortcutsHint" style="margin: 0"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ------------------------------ 站点规则 ------------------------------ -->
+    <section class="panel" data-panel="sites">
+      <div class="card">
+        <h2>自动翻译的站点</h2>
+        <p class="row-note">每行一个域名，支持 <code>*.example.com</code> 通配。打开这些站点会自动整页翻译。</p>
+        <textarea id="autoSites" rows="8" spellcheck="false" placeholder="news.ycombinator.com&#10;*.arxiv.org"></textarea>
+      </div>
+      <div class="card">
+        <h2>从不翻译的站点</h2>
+        <p class="row-note">优先级高于自动翻译列表。</p>
+        <textarea id="neverSites" rows="8" spellcheck="false" placeholder="mail.google.com"></textarea>
+      </div>
+    </section>
+
+    <!-- ------------------------------ 高级 ------------------------------ -->
+    <section class="panel" data-panel="advanced">
+      <div class="card">
+        <h2>性能与请求</h2>
+        <label class="check">
+          <input type="checkbox" id="lazyTranslate" />
+          <span>按可视区域翻译（滚动到哪翻到哪，更省 token）</span>
+        </label>
+        <div class="row">
+          <label for="batchSize">每批段落数</label>
+          <input id="batchSize" type="number" min="1" max="40" step="1" />
+          <span class="unit">段 / 请求</span>
+        </div>
+        <div class="row">
+          <label for="maxCharsPerBatch">每批字符上限</label>
+          <input id="maxCharsPerBatch" type="number" min="200" max="20000" step="100" />
+          <span class="unit">字符</span>
+        </div>
+        <div class="row">
+          <label for="concurrency">并发请求数</label>
+          <input id="concurrency" type="number" min="1" max="10" step="1" />
+          <span class="unit">个</span>
+        </div>
+        <div class="row">
+          <label for="minTextLength">最短翻译长度</label>
+          <input id="minTextLength" type="number" min="1" max="50" step="1" />
+          <span class="unit">字符</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>数据</h2>
+        <div class="actions">
+          <button id="exportBtn" class="secondary" type="button">导出配置</button>
+          <button id="importBtn" class="secondary" type="button">导入配置</button>
+          <input id="importFile" type="file" accept="application/json" hidden />
+          <span class="spacer"></span>
+          <button id="resetBtn" class="danger" type="button">恢复默认设置</button>
+        </div>
+        <p class="row-note">导出的 JSON 包含 API Key，请勿分享给他人。</p>
+      </div>
+    </section>
+
+    <script src="../shared/constants.js"></script>
+    <script src="../shared/lang.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
