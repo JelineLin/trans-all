@@ -21,7 +21,8 @@ globalThis.TA = globalThis.TA || {};
     SET_TAB_PAGE_STATE: 'set-tab-page-state',
     TRANSLATE_SELECTION: 'translate-selection',
     SETTINGS_CHANGED: 'settings-changed',
-    OPEN_OPTIONS: 'open-options'
+    OPEN_OPTIONS: 'open-options',
+    CLEAR_CACHE: 'clear-cache'
   };
 
   TA.LANGUAGES = [
@@ -201,12 +202,14 @@ globalThis.TA = globalThis.TA || {};
     /** 整页翻译时按可视区域懒加载，滚动到哪翻到哪 */
     lazyTranslate: true,
     /**
-     * 每批次最多包含多少个段落。批次越大，模型要生成完整批才返回，首段出现得越晚，
-     * 所以这里偏小；配合流式逐段渲染，小批次 + 高并发的体感明显更快。
+     * 每批次最多包含多少个段落。这是「首段体感」和「token 开销」之间的取舍：
+     * 每批都要重发一遍约 1500 字符的系统提示词，批次小则提示词占比高
+     * （6 段/批时提示词占输入的 61%，16 段/批降到 37%）；批次大则首段出现得晚。
+     * 流式逐段渲染把大批次的等待摊薄了不少，所以默认取 16。要更快的首屏可以调低。
      */
-    batchSize: 6,
-    /** 每批次最多多少字符，超过则拆批 */
-    maxCharsPerBatch: 1500,
+    batchSize: 16,
+    /** 每批次最多多少字符，超过则拆批。要和 batchSize 一起看，否则一个卡住另一个 */
+    maxCharsPerBatch: 4000,
     /** 同时进行的请求数 */
     concurrency: 8,
     /** 少于该字符数的段落不翻译 */

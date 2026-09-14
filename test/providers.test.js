@@ -90,7 +90,10 @@ test('Anthropic：Messages 接口、版本头与浏览器直连声明', async ()
   assert.equal(seen().headers['anthropic-version'], '2023-06-01');
   // 扩展的请求来源是 chrome-extension://，缺这个头会被拒
   assert.equal(seen().headers['anthropic-dangerous-direct-browser-access'], 'true');
-  assert.equal(seen().body.system, 'S');
+  // system 走带 cache_control 的块，服务端命中后按约 10% 计费
+  assert.deepEqual(seen().body.system, [
+    { type: 'text', text: 'S', cache_control: { type: 'ephemeral' } }
+  ]);
   assert.equal(seen().body.max_tokens, 1000, 'max_tokens 是必填项');
   assert.equal(out, '译文');
 });

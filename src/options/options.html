@@ -182,6 +182,17 @@
           <input id="maxCharsPerBatch" type="number" min="200" max="20000" step="100" />
           <span class="unit">字符</span>
         </div>
+        <p class="row-note">
+          每批都要重发一遍系统提示词，批次越小提示词占比越高（6 段/批约 61%，16 段/批约 37%）；
+          批次越大首段出现得越晚。两个上限同时生效，调一个记得看另一个。
+        </p>
+        <div class="row">
+          <label>翻译缓存</label>
+          <button id="clearCache" class="mini" type="button">清空缓存</button>
+          <span class="row-note" id="cacheNote" style="margin: 0">
+            译文按段落缓存 7 天，跨浏览器重启有效；翻错了的段落可在此清掉重译。
+          </span>
+        </div>
         <div class="row">
           <label for="concurrency">并发请求数</label>
           <input id="concurrency" type="number" min="1" max="10" step="1" />

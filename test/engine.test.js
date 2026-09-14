@@ -386,39 +386,42 @@ test('模型漏段仍然逐条补发（这条路径不受限流修复影响）',
 });
 
 /* ------------------------------------------------------------------ *
- * 缓存持久化：MV3 的 service worker 随时会被回收，纯内存缓存等于没有
+ * 缓存持久化
+ *
+ * MV3 的 service worker 随时会被回收，纯内存缓存等于没有；
+ * chrome.storage.session 又会在关浏览器时清空。现在落在 storage.local，
+ * 带 7 天 TTL，第二天重读同一篇文章不用重新付费。
  * ------------------------------------------------------------------ */
 
 const { chromeMock } = require('./helpers/env');
 
-test('译文会落到 session 存储，供 service worker 重启后复用', async () => {
+/** 落盘是 5 秒去抖，测试里等它跑完 */
+const waitFlush = () => new Promise((r) => setTimeout(r, 5200));
+
+test('译文会落到 storage.local，带写入时间', async () => {
   await reset();
   mockLLM(segEcho((t) => '译:' + t));
   await TA.engine.translateBatch(['alpha', 'beta'], {});
+  await waitFlush();
 
-  // 攒批写入是延迟 2 秒的
-  await new Promise((r) => setTimeout(r, 2100));
-
-  const saved = chromeMock.storage.session._data.ta_cache;
-  assert.ok(Array.isArray(saved), '应写入 session 存储');
+  const saved = chromeMock.storage.local._data.ta_cache;
+  assert.ok(Array.isArray(saved), '应写入 storage.local');
   assert.equal(saved.length, 2);
-  assert.ok(
-    saved.some(([, value]) => value === '译:alpha'),
-    '存的应是译文本身'
-  );
+  const entry = saved.find(([, value]) => value === '译:alpha');
+  assert.ok(entry, '存的应是译文本身');
+  assert.equal(typeof entry[2], 'number', '每条要带写入时间，否则无法过期');
 });
 
-test('service worker 重启后从 session 存储恢复缓存，不重新付费', async () => {
+test('service worker 重启后从 storage.local 恢复缓存，不重新付费', async () => {
   await reset();
   mockLLM(segEcho((t) => '译:' + t));
   await TA.engine.translateBatch(['alpha', 'beta'], {});
-  await new Promise((r) => setTimeout(r, 2100));
+  await waitFlush();
+  const survived = chromeMock.storage.local._data.ta_cache;
 
-  const survived = chromeMock.storage.session._data.ta_cache;
-
-  // 模拟 SW 被回收：内存缓存没了，session 存储还在
+  // 模拟 SW 被回收：内存缓存没了，磁盘上的还在
   TA.engine.clearCache();
-  chromeMock.storage.session._data.ta_cache = survived;
+  chromeMock.storage.local._data.ta_cache = survived;
 
   const calls = mockLLM(segEcho((t) => '不该被调用:' + t));
   const out = await TA.engine.translateBatch(['alpha', 'beta'], {});
@@ -427,15 +430,63 @@ test('service worker 重启后从 session 存储恢复缓存，不重新付费',
   assert.deepEqual(out.map((r) => r.text), ['译:alpha', '译:beta']);
 });
 
-test('session 存储不可用时退回纯内存，不影响翻译', async () => {
+test('超过 7 天的缓存条目在恢复时被丢弃', async () => {
   await reset();
-  const real = chromeMock.storage.session;
-  chromeMock.storage.session = undefined;
+  TA.engine.clearCache();
+
+  const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  const provider = settingsWithProvider().providers[0];
+  const key = JSON.stringify([provider.id, provider.model, 'zh-CN', '', 'alpha']);
+  chromeMock.storage.local._data.ta_cache = [[key, '过期译文', eightDaysAgo]];
+
+  const calls = mockLLM(() => '新译文');
+  const out = await TA.engine.translateBatch(['alpha'], {});
+
+  assert.equal(calls.length, 1, '过期条目不该命中，应重新请求');
+  assert.equal(out[0].text, '新译文');
+});
+
+test('storage.local 不可用时退回纯内存，不影响翻译', async () => {
+  await reset();
+  const real = chromeMock.storage.local;
+  // 设置读取也走 storage.local，先把设置读进缓存再拔掉存储
+  await TA.storage.get();
+  chromeMock.storage.local = undefined;
   try {
     mockLLM(segEcho((t) => '译:' + t));
     const out = await TA.engine.translateBatch(['alpha', 'beta'], {});
     assert.deepEqual(out.map((r) => r.text), ['译:alpha', '译:beta']);
   } finally {
-    chromeMock.storage.session = real;
+    chromeMock.storage.local = real;
   }
+});
+
+/* ------------------------------------------------------------------ *
+ * 缓存失效范围：只有真正影响译文的设置才该让缓存失效
+ * ------------------------------------------------------------------ */
+
+test('自定义提示词进入缓存 key，改提示词后不会拿到旧译文', async () => {
+  await reset({ customPrompt: '正式语气' });
+  const calls = mockLLM(() => '正式的译文');
+  await TA.engine.translateBatch(['alpha'], {});
+  assert.equal(calls.length, 1);
+
+  // 只改提示词，不清缓存——key 不同就不会命中
+  await TA.storage.patch({ customPrompt: '口语化' });
+  mockLLM(() => '口语化的译文');
+  const out = await TA.engine.translateBatch(['alpha'], {});
+  assert.equal(out[0].text, '口语化的译文', '改了提示词就不能沿用旧译文');
+});
+
+test('改译文样式这类与译文无关的设置，缓存必须保留', async () => {
+  await reset();
+  const calls = mockLLM(segEcho((t) => '译:' + t));
+  await TA.engine.translateBatch(['alpha', 'beta'], {});
+  assert.equal(calls.length, 1);
+
+  // 曾经的实现：任何设置变更都 clearCache，改个样式整页缓存全没
+  await TA.storage.patch({ translationStyle: 'quote', displayMode: 'replace', concurrency: 2 });
+  const out = await TA.engine.translateBatch(['alpha', 'beta'], {});
+  assert.equal(calls.length, 1, '样式、展示方式、并发数都不影响译文，不该让缓存失效');
+  assert.ok(out.every((r) => r.cached));
 });

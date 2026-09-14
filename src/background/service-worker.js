@@ -85,9 +85,6 @@ importScripts(
 
   /* ---------------------------- 消息路由 ---------------------------- */
 
-  // 缓存 key 不包含自定义提示词，设置一变就整体作废，避免沿用旧提示词的译文
-  TA.storage.onChange(() => TA.engine.clearCache());
-
   const handlers = {
     async [TA.MSG.GET_SETTINGS]() {
       return TA.storage.get();
@@ -113,6 +110,11 @@ importScripts(
 
     async [TA.MSG.OPEN_OPTIONS]() {
       chrome.runtime.openOptionsPage();
+      return { ok: true };
+    },
+
+    async [TA.MSG.CLEAR_CACHE]() {
+      TA.engine.clearCache();
       return { ok: true };
     },
 

@@ -70,6 +70,20 @@ npm test
 （OpenAI 兼容为 `GET /v1/models`，Anthropic 为 `GET /v1/models`，Gemini 为 `GET /v1beta/models`）
 查询当前真实可用的模型，避免内置的建议列表过期。
 
+### token 开销与缓存
+
+译文按**段落**缓存：key 由服务商、模型、目标语言、自定义提示词和原文共同构成，任何一项不同都不命中。
+缓存落在 `chrome.storage.local`，保留 7 天，跨浏览器重启有效；设置页「高级」里可手动清空。
+改译文样式、展示方式、并发数这类不影响译文内容的设置**不会**让缓存失效。
+
+每次请求都要重发一遍约 1500 字符的系统提示词，所以批次大小直接决定开销：
+6 段/批时提示词占输入的 61%，默认的 16 段/批降到 37%。批次越大首段出现得越晚，
+要更快的首屏可以在「高级」里调低 `每批段落数`。
+
+Anthropic 接口的系统提示词已标记 `cache_control`，但服务端缓存有最小前缀门槛
+（Opus 5 为 512 token，Sonnet / Opus 4.8 为 1024），默认提示词约 380 token 达不到，
+只有加了较长的自定义提示词之后才会真正命中。
+
 各家 API Key 的申请入口：
 
 | 服务 | 地址 |
@@ -102,7 +116,7 @@ src/
   shared/          三个上下文共用（经典脚本，挂在 globalThis.TA 上）
     constants.js   默认设置、语言表、服务商预设
     lang.js        书写系统判定，跳过已是目标语言的段落
-    storage.js     设置读写与跨上下文缓存失效
+    storage.js     设置读写与跨上下文同步
     providers.js   OpenAI / Anthropic / Gemini 适配与 SSE 解析
     engine.js      提示词、分批协议、译文缓存、并发控制
   background/

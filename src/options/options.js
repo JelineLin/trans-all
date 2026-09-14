@@ -187,6 +187,20 @@
     });
   }
 
+  $('clearCache').addEventListener('click', async () => {
+    const note = $('cacheNote');
+    const button = $('clearCache');
+    button.disabled = true;
+    try {
+      const response = await chrome.runtime.sendMessage({ type: TA.MSG.CLEAR_CACHE });
+      note.textContent = response && response.ok ? '已清空，下次翻译会重新请求。' : '清空失败，请重试。';
+    } catch (err) {
+      note.textContent = '清空失败：' + (err.message || String(err));
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   $('fetchModels').addEventListener('click', async () => {
     const provider = readForm();
     if (!provider) return;

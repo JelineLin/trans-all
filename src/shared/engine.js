@@ -123,17 +123,25 @@ globalThis.TA = globalThis.TA || {};
   const cache = new Map();
 
   /*
-   * MV3 的 service worker 空闲约 30 秒就被回收，纯内存缓存会随之清零——
-   * 用户翻完一页去别处待一会儿再回来，同一页要重新付费翻一遍。
-   * chrome.storage.session 正好是为这个场景准备的：内存级、跨 SW 重启存活、关浏览器清空。
+   * 两层缓存：内存 Map 是 L1，chrome.storage.local 是 L2。
+   *
+   * 只靠内存不行——MV3 的 service worker 空闲约 30 秒就被回收，缓存随之清零。
+   * 之前用 chrome.storage.session，但它关浏览器就清空，第二天重读同一篇文章还要重新付费。
+   * 改成 local 后跨重启存活，代价是要自己管过期和体积：
+   * - 条目带写入时间，超过 TTL 的在水合时丢弃
+   * - 持久化的条目数与 L1 的 LRU 上限一致，体积可控（3000 条 × 几百字节 ≈ 1 MB）
    */
-  const SESSION_KEY = 'ta_cache';
+  const CACHE_STORE_KEY = 'ta_cache';
+  const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const FLUSH_DELAY_MS = 5000;
   let hydrated = false;
   let flushTimer = null;
+  /** 每个 key 的写入时间，随 L1 一起维护，落盘时一并写出 */
+  const stamps = new Map();
 
-  function sessionStore() {
+  function cacheStore() {
     try {
-      return (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) || null;
+      return (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) || null;
     } catch (_) {
       return null;
     }
@@ -142,38 +150,53 @@ globalThis.TA = globalThis.TA || {};
   async function hydrateCache() {
     if (hydrated) return;
     hydrated = true;
-    const store = sessionStore();
+    const store = cacheStore();
     if (!store) return;
     try {
-      const raw = await store.get(SESSION_KEY);
-      const entries = raw && raw[SESSION_KEY];
+      const raw = await store.get(CACHE_STORE_KEY);
+      const entries = raw && raw[CACHE_STORE_KEY];
       if (!Array.isArray(entries)) return;
-      entries.forEach(([key, value]) => {
-        if (typeof key === 'string' && typeof value === 'string' && !cache.has(key)) {
-          cache.set(key, value);
-        }
+      const now = Date.now();
+      entries.forEach((entry) => {
+        if (!Array.isArray(entry)) return;
+        const [key, value, at] = entry;
+        if (typeof key !== 'string' || typeof value !== 'string') return;
+        if (typeof at !== 'number' || now - at > CACHE_TTL_MS) return; // 过期
+        if (cache.has(key)) return; // 内存里的更新
+        cache.set(key, value);
+        stamps.set(key, at);
       });
     } catch (_) {
-      // 会话存储不可用（配额满、老版本浏览器）就退回纯内存，不影响功能
+      // 存储不可用（配额满、老版本浏览器）就退回纯内存，不影响功能
     }
   }
 
   /** 攒一会儿再整体写入，避免每译一段就落一次盘 */
   function scheduleFlush() {
-    const store = sessionStore();
+    const store = cacheStore();
     if (!store || flushTimer) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
+      const entries = Array.from(cache.entries()).map(([key, value]) => [
+        key,
+        value,
+        stamps.get(key) || Date.now()
+      ]);
       Promise.resolve()
-        .then(() => store.set({ [SESSION_KEY]: Array.from(cache.entries()) }))
+        .then(() => store.set({ [CACHE_STORE_KEY]: entries }))
         .catch(() => {
-          // 多半是超出配额；下次写入会带上更少的条目（LRU 已经淘汰过）
+          // 多半是超出配额；LRU 会继续淘汰，下次写入的条目更少
         });
-    }, 2000);
+    }, FLUSH_DELAY_MS);
   }
 
-  function cacheKey(provider, lang, text) {
-    return JSON.stringify([provider.id, provider.model, lang, text]);
+  /**
+   * 自定义提示词会改变译文，必须进 key。
+   * 之前 key 里没有它，只好在任何设置变更时清空整个缓存——改一下译文样式
+   * 这种跟译文毫无关系的选项，缓存也全没了。
+   */
+  function cacheKey(provider, lang, customPrompt, text) {
+    return JSON.stringify([provider.id, provider.model, lang, customPrompt || '', text]);
   }
 
   function cacheGet(key) {
@@ -188,8 +211,11 @@ globalThis.TA = globalThis.TA || {};
   function cacheSet(key, value) {
     if (cache.has(key)) cache.delete(key);
     cache.set(key, value);
+    stamps.set(key, Date.now());
     while (cache.size > CACHE_LIMIT) {
-      cache.delete(cache.keys().next().value);
+      const oldest = cache.keys().next().value;
+      cache.delete(oldest);
+      stamps.delete(oldest);
     }
     scheduleFlush();
   }
@@ -393,7 +419,7 @@ globalThis.TA = globalThis.TA || {};
       const pending = [];
 
       texts.forEach((text, index) => {
-        const key = cacheKey(provider, targetLang, text);
+        const key = cacheKey(provider, targetLang, settings.customPrompt, text);
         const hit = cacheGet(key);
         if (hit !== undefined) {
           results[index] = { text: hit, cached: true };
@@ -537,11 +563,12 @@ globalThis.TA = globalThis.TA || {};
 
     clearCache() {
       cache.clear();
+      stamps.clear();
       hydrated = false;
       clearTimeout(flushTimer);
       flushTimer = null;
-      const store = sessionStore();
-      if (store) Promise.resolve().then(() => store.remove(SESSION_KEY)).catch(() => {});
+      const store = cacheStore();
+      if (store) Promise.resolve().then(() => store.remove(CACHE_STORE_KEY)).catch(() => {});
     },
 
     /** 重试参数，供测试与将来的设置项调整 */

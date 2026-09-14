@@ -19,15 +19,21 @@ const SRC = path.join(ROOT, 'src');
  * 就会注册 storage.onChanged 监听。
  */
 const chromeMock = {
-  _stored: undefined,
   _onChanged: [],
   storage: {
+    // 通用键值存储：设置存 ta_settings，翻译缓存存 ta_cache
     local: {
-      async get() {
-        return chromeMock._stored === undefined ? {} : { ta_settings: chromeMock._stored };
+      _data: {},
+      async get(key) {
+        const data = chromeMock.storage.local._data;
+        if (typeof key === 'string') return key in data ? { [key]: data[key] } : {};
+        return Object.assign({}, data);
       },
       async set(obj) {
-        chromeMock._stored = obj.ta_settings;
+        Object.assign(chromeMock.storage.local._data, obj);
+      },
+      async remove(key) {
+        delete chromeMock.storage.local._data[key];
       }
     },
     onChanged: {

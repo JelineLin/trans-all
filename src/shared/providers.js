@@ -149,7 +149,11 @@ globalThis.TA = globalThis.TA || {};
       const body = {
         model: provider.model,
         max_tokens: provider.maxTokens || 4096,
-        system,
+        // 系统提示词每批都原样重发，标记成可缓存后服务端命中只按约 10% 计费。
+        // 注意这有最小前缀门槛（Opus 5 为 512 token，Sonnet/Opus 4.8 为 1024，
+        // Haiku 4.5 为 4096）；默认提示词约 380 token 达不到，标记不会报错但也不生效，
+        // 用户加了较长的自定义提示词之后才会真正命中。
+        system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: user }],
         stream: !!stream
       };
