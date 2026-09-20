@@ -210,7 +210,10 @@ globalThis.TA = globalThis.TA || {};
     batchSize: 16,
     /** 每批次最多多少字符，超过则拆批。要和 batchSize 一起看，否则一个卡住另一个 */
     maxCharsPerBatch: 4000,
-    /** 同时进行的请求数 */
+    /**
+     * 同时在飞的 LLM 请求数上限。只在后台 service worker 一处生效，
+     * 覆盖所有标签页的整页翻译与划词翻译——它贴的是 API 配额，不是单个页面。
+     */
     concurrency: 8,
     /** 少于该字符数的段落不翻译 */
     minTextLength: 2,

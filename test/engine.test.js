@@ -490,3 +490,107 @@ test('改译文样式这类与译文无关的设置，缓存必须保留', async
   assert.equal(calls.length, 1, '样式、展示方式、并发数都不影响译文，不该让缓存失效');
   assert.ok(out.every((r) => r.cached));
 });
+
+/* ------------------------------------------------------------------ *
+ * 并发上限
+ *
+ * 页面侧不再限并发（否则同一个 concurrency 设置在两层各生效一次，实际值是两者取小，
+ * 调设置时行为跟直觉对不上）。这里是唯一的一层，贴着 API 配额，也同时服务划词翻译。
+ * ------------------------------------------------------------------ */
+
+/** 假 LLM：每个请求挂起直到手动放行，用来观察同时在飞的请求数 */
+function gatedLLM() {
+  const inflight = [];
+  let peak = 0;
+  global.fetch = (url, init) =>
+    new Promise((resolve) => {
+      const user = JSON.parse(init.body).messages[1].content;
+      const release = () => {
+        inflight.splice(inflight.indexOf(release), 1);
+        const out = segEcho((t) => '译:' + t)(user);
+        const chunks = sseChunks(out);
+        let i = 0;
+        resolve({
+          ok: true,
+          json: async () => ({ choices: [{ message: { content: out } }] }),
+          body: {
+            getReader: () => ({
+              read: async () =>
+                i < chunks.length
+                  ? { done: false, value: new TextEncoder().encode(chunks[i++]) }
+                  : { done: true, value: undefined },
+              cancel() {}
+            })
+          }
+        });
+      };
+      inflight.push(release);
+      peak = Math.max(peak, inflight.length);
+    });
+  return {
+    get inflight() {
+      return inflight.length;
+    },
+    get peak() {
+      return peak;
+    },
+    releaseOne() {
+      if (inflight.length) inflight[0]();
+    },
+    releaseAll() {
+      while (inflight.length) inflight[0]();
+    }
+  };
+}
+
+/** 反复放行并等一小会儿，直到所有任务落定；漏放一个就会挂住整个测试 */
+async function drain(gate, jobs) {
+  let settled = false;
+  Promise.all(jobs).then(() => (settled = true), () => (settled = true));
+  for (let i = 0; i < 50 && !settled; i += 1) {
+    gate.releaseAll();
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return Promise.all(jobs);
+}
+
+test('后台并发受 concurrency 限制，先跑的没结束不会超发', async () => {
+  await reset({ concurrency: 3 });
+  const gate = gatedLLM();
+
+  // 8 个独立批次同时到达（对应页面侧一次性开出 8 个端口）
+  const jobs = Array.from({ length: 8 }, (_, i) =>
+    TA.engine.translateBatch([`a${i}`, `b${i}`], {})
+  );
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(gate.inflight, 3, '同时在飞的请求应恰好是 concurrency');
+
+  gate.releaseOne();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(gate.inflight, 3, '放行一个后应立刻补位到上限');
+
+  const out = await drain(gate, jobs);
+  assert.equal(gate.peak, 3, '整个过程峰值不得超过 concurrency');
+  assert.ok(out.every((r) => r.every((x) => x.text)), '全部批次最终都要完成');
+});
+
+test('改小 concurrency 后，新的批次按新上限排队', async () => {
+  await reset({ concurrency: 4 });
+  const gate = gatedLLM();
+  const jobs = Array.from({ length: 6 }, (_, i) => TA.engine.translateBatch([`a${i}`, `b${i}`], {}));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(gate.inflight, 4);
+
+  await drain(gate, jobs);
+
+  // 设置改成 1，再来一批
+  await TA.storage.patch({ concurrency: 1 });
+  const gate2 = gatedLLM();
+  const jobs2 = Array.from({ length: 4 }, (_, i) => TA.engine.translateBatch([`c${i}`, `d${i}`], {}));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(gate2.inflight, 1, '新上限应立即生效');
+
+  await drain(gate2, jobs2);
+  assert.equal(gate2.peak, 1);
+});

@@ -157,18 +157,17 @@ test('超过 maxCharsPerBatch 时拆批', async () => {
   });
 });
 
-test('并发受 concurrency 限制，先跑的没结束不会超发', async () => {
+test('页面侧不限并发：所有批次立即发出，由后台 limiter 统一排队', async () => {
+  // 曾经页面侧也按 concurrency 限一次，和后台各限一遍，实际生效的是两者取小
   const ctx = setup(paragraphs(20), { batchSize: 1, concurrency: 3 });
   TA.page.translate();
   ctx.reveal();
   await tick();
 
-  assert.equal(ctx.ports.length, 3, '同时最多 3 个请求在跑');
+  assert.equal(ctx.ports.length, 20, '20 个批次应全部开出端口，不在页面侧排队');
+  assert.equal(TA.page.inspect().pending, 0, '页面侧队列应已清空');
 
-  // 放行一个，应当补上下一个
-  respondAll(ctx.ports[0], (t) => '译:' + t);
-  await tick();
-  assert.equal(ctx.ports.length, 4, '有请求结束后应立刻补位');
+  // 后台那层的并发保证见 engine.test.js「后台并发受 concurrency 限制」
 });
 
 test('逐段上屏：收到一段就渲染一段，不等整批结束', async () => {
@@ -719,5 +718,72 @@ test('插入无关内容不会清掉已有译文', async () => {
     ctx.doc.querySelectorAll('font.ta-target').length,
     before,
     '已有译文不该因为别处插入了内容而被清掉'
+  );
+});
+
+/* ------------------------------------------------------------------ *
+ * 单元索引：MutationObserver 每条记录找「哪些单元被波及」要走索引，不能扫全表
+ * ------------------------------------------------------------------ */
+
+test('删掉一个容器，只有容器里的单元被清理，其余译文原封不动', async () => {
+  const ctx = setup(
+    '<section id="a">' + paragraphs(3) + '</section><section id="b">' + paragraphs(3) + '</section>'
+  );
+  TA.page.translate();
+  ctx.reveal();
+  await tick();
+  ctx.ports.forEach((p) => respondAll(p, (t, i) => '译文' + i));
+  assert.equal(TA.page.inspect().units, 6);
+  assert.equal(ctx.doc.querySelectorAll('font.ta-target').length, 6);
+
+  ctx.doc.getElementById('a').remove();
+  await tick(600);
+
+  assert.equal(TA.page.inspect().units, 3, '被删容器里的 3 个单元应从索引里摘掉');
+  assert.equal(ctx.doc.querySelectorAll('font.ta-target').length, 3, '另一个容器的译文不该受影响');
+});
+
+test('散落文字单元：父元素里增删行内节点会让该段失效', async () => {
+  const ctx = setup('<div id="host">Loose text before<p>A paragraph here.</p></div>');
+  TA.page.translate();
+  ctx.reveal();
+  await tick();
+  ctx.ports.forEach((p) => respondAll(p, (t, i) => '译文' + i));
+  const before = ctx.ports.length;
+
+  // 往散落文字所在的父元素里插一个行内节点，这一段的内容变了
+  const host = ctx.doc.getElementById('host');
+  host.insertBefore(ctx.doc.createElement('b'), host.firstChild);
+  await tick(600);
+  ctx.reveal();
+  await tick();
+
+  assert.ok(ctx.ports.length > before, '散落文字单元应被判失效并重新翻译');
+});
+
+test('变动记录的处理开销不随页面单元数增长', async () => {
+  // 曾经每条记录都把 units 扫一遍做 containment 检查，5000 段的页面一条 8ms
+  async function costPerRecord(pageSize) {
+    const ctx = setup(paragraphs(pageSize) + '<div id="side"></div>');
+    TA.page.translate();
+    ctx.reveal();
+    await tick();
+
+    const side = ctx.doc.getElementById('side');
+    const start = process.hrtime.bigint();
+    for (let i = 0; i < 200; i += 1) side.textContent = 'tick ' + i;
+    await tick(0); // 让 MutationObserver 回调跑完（微任务）
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    TA.page.restore();
+    return ms;
+  }
+
+  const small = await costPerRecord(50);
+  const large = await costPerRecord(2000);
+
+  // 允许一定抖动，但 40 倍的页面不能带来接近 40 倍的开销
+  assert.ok(
+    large < small * 6 + 20,
+    `50 段耗时 ${small.toFixed(1)}ms，2000 段耗时 ${large.toFixed(1)}ms——开销跟着页面大小涨，说明又在扫全表`
   );
 });

@@ -9,6 +9,14 @@ globalThis.TA = globalThis.TA || {};
   let active = false;
 
   let units = [];
+  /*
+   * 单元索引。MutationObserver 每条记录都要回答「哪些单元被波及」——
+   * 之前是把 units 整个扫一遍做 containment 检查，5000 段的页面上一条记录 8ms，
+   * 站点一次改 50 个小东西就是 400ms 主线程阻塞。
+   * 改成从变动节点向上走祖先链查索引，开销只跟树深有关，跟页面大小无关。
+   */
+  let unitByNode = new WeakMap();      // 单元的每个节点 -> 单元
+  let runUnitsByParent = new WeakMap(); // 散落文字单元的父元素 -> Set<单元>
   let pending = [];
   let inFlight = 0;
 
@@ -131,9 +139,15 @@ globalThis.TA = globalThis.TA || {};
     return batch;
   }
 
+  /*
+   * 把攒好的段落切批发出去。这里不限并发：并发上限只在后台 engine 的 limiter 一处生效，
+   * 它贴着 API 配额，也同时服务所有标签页和划词翻译。曾经页面侧也按 concurrency 限一次，
+   * 两层各限一遍实际生效的是两者取小，调设置时行为跟直觉对不上。
+   * 端口开多了不要紧：后台按 FIFO 排队，用户点「还原」时端口断开会连排队中的一起取消。
+   */
   function schedule() {
     const settings = getSettings();
-    while (active && inFlight < settings.concurrency && pending.length) {
+    while (active && pending.length) {
       const batch = takeBatch(settings);
       if (!batch.length) break;
       inFlight += 1;
@@ -292,6 +306,7 @@ globalThis.TA = globalThis.TA || {};
     if (!found.length) return;
 
     units = units.concat(found);
+    found.forEach(indexUnit);
     found.forEach((unit) => {
       if (settings.lazyTranslate) {
         observeUnit(unit);
@@ -317,45 +332,81 @@ globalThis.TA = globalThis.TA || {};
     childShadowRoots(root).forEach(scanTree);
   }
 
-  function nodesIntersect(a, b) {
-    if (!a || !b) return false;
-    if (a === b) return true;
-    if (a.nodeType === Node.ELEMENT_NODE && a.contains(b)) return true;
-    if (b.nodeType === Node.ELEMENT_NODE && b.contains(a)) return true;
-    return false;
+  function indexUnit(unit) {
+    unit.nodes.forEach((node) => unitByNode.set(node, unit));
+    if (!unit.wholeElement && unit.parent) {
+      let set = runUnitsByParent.get(unit.parent);
+      if (!set) {
+        set = new Set();
+        runUnitsByParent.set(unit.parent, set);
+      }
+      set.add(unit);
+    }
   }
 
-  /** 变动是否发生在这个单元「内部」——注意方向，祖先上的变动不算 */
-  function unitContains(unit, node) {
-    if (!node) return false;
-    return unit.nodes.some(
-      (own) => own === node || (own.nodeType === Node.ELEMENT_NODE && own.contains(node))
-    );
+  function unindexUnit(unit) {
+    unit.nodes.forEach((node) => {
+      if (unitByNode.get(node) === unit) unitByNode.delete(node);
+    });
+    if (!unit.wholeElement && unit.parent) {
+      const set = runUnitsByParent.get(unit.parent);
+      if (set) {
+        set.delete(unit);
+        if (!set.size) runUnitsByParent.delete(unit.parent);
+      }
+    }
+  }
+
+  /** 从节点沿祖先链向上找包着它的单元。单元互不嵌套，所以最多命中一个 */
+  function enclosingUnit(node) {
+    let cur = node;
+    while (cur && cur.nodeType !== Node.DOCUMENT_NODE) {
+      const unit = unitByNode.get(cur);
+      if (unit) return unit;
+      cur = cur.parentNode;
+    }
+    return null;
+  }
+
+  /** 被摘掉的子树里可能包着若干单元，逐个节点查索引；开销正比于被删的部分 */
+  function unitsInside(root, out) {
+    const unit = unitByNode.get(root);
+    if (unit) out.add(unit);
+    if (root.nodeType !== Node.ELEMENT_NODE) return;
+    for (let child = root.firstChild; child; child = child.nextSibling) {
+      unitsInside(child, out);
+    }
   }
 
   /*
-   * 判断一个单元是否被这次变动波及。
+   * 一条变动记录波及了哪些单元。
    *
-   * 这里的方向性很要命：曾经用双向的 nodesIntersect，于是「body 包含这个段落」
-   * 也算相交——往页面上插任何一个新节点，全页所有译文都会被判定失效并清空重译。
-   * 无限滚动页面每加载一屏就整页闪一次。
-   * 正确的语义是：改动落在单元内部才算，落在祖先上的兄弟增删与本单元无关。
+   * 方向性很要命：改动落在单元内部才算，落在祖先上的兄弟增删与本单元无关——
+   * 曾经用双向的 containment 判断，往 body 里插任何一个节点，全页译文都被判失效重译。
+   * 单元自身被摘掉时，record.target 是它原来的父节点，只能从 removedNodes 认。
    */
-  function unitAffectedBy(unit, record) {
+  function affectedUnits(record) {
+    const hits = new Set();
+
     if (record.type === 'characterData') {
-      return unitContains(unit, record.target);
+      const unit = enclosingUnit(record.target);
+      if (unit) hits.add(unit);
+      return hits;
     }
 
+    // 变动发生在某个单元内部
+    const enclosing = enclosingUnit(record.target);
+    if (enclosing) hits.add(enclosing);
+
     // 散落文字单元由 parent 承载；parent 内的行内节点增删确实会改变这一段
-    if (!unit.wholeElement && unit.parent === record.target) return true;
-    if (unitContains(unit, record.target)) return true;
+    const runs = runUnitsByParent.get(record.target);
+    if (runs) runs.forEach((unit) => hits.add(unit));
 
-    // 单元自身被摘掉时，record.target 是它原来的父节点，只能从 removedNodes 认
-    return Array.from(record.removedNodes || []).some((removed) =>
-      unit.nodes.some((node) => nodesIntersect(node, removed))
-    );
+    // 被摘掉的节点：可能本身就是单元节点，也可能包着若干单元
+    Array.from(record.removedNodes || []).forEach((removed) => unitsInside(removed, hits));
+
+    return hits;
   }
-
   /** 原文变化时废弃旧单元；在途结果到达后会被识别为过期而丢弃。 */
   function invalidateUnits(changed) {
     if (!changed.size) return;
@@ -372,7 +423,10 @@ globalThis.TA = globalThis.TA || {};
     });
 
     write(() => changed.forEach((unit) => TA.render.clear(unit)));
-    changed.forEach((unit) => TA.dom.forget(unit));
+    changed.forEach((unit) => {
+      TA.dom.forget(unit);
+      unindexUnit(unit);
+    });
     units = units.filter((unit) => !changed.has(unit));
   }
 
@@ -415,9 +469,7 @@ globalThis.TA = globalThis.TA || {};
         if (recordDirty) {
           dirty = true;
           collectRoots(record);
-          units.forEach((unit) => {
-            if (unitAffectedBy(unit, record)) changed.add(unit);
-          });
+          affectedUnits(record).forEach((unit) => changed.add(unit));
         }
       }
       if (!dirty) return;
@@ -539,6 +591,8 @@ globalThis.TA = globalThis.TA || {};
     }
     active = true;
     units = [];
+    unitByNode = new WeakMap();
+    runUnitsByParent = new WeakMap();
     pending = [];
     inFlight = 0;
     stats.total = 0;
@@ -577,6 +631,8 @@ globalThis.TA = globalThis.TA || {};
 
     write(() => TA.render.clearAll());
     units = [];
+    unitByNode = new WeakMap();
+    runUnitsByParent = new WeakMap();
     TA.dom.reset();
     restoreTitle();
     if (showHud) TA.ui.hud.hide();
@@ -589,6 +645,17 @@ globalThis.TA = globalThis.TA || {};
     },
     translate,
     restore,
+    /** 内部计数快照，供排查与测试观察调度状态；不要据此做业务判断 */
+    inspect() {
+      return {
+        units: units.length,
+        pending: pending.length,
+        inFlight,
+        observedAnchors: anchorMap.size,
+        done: stats.done,
+        failed: stats.failed
+      };
+    },
     toggle() {
       // 只看 active 会漏掉「脚本被重新注入、状态丢了但译文还在」的情况，
       // 那时再按一次就变成叠加翻译，所以同时看 DOM
