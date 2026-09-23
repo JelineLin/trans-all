@@ -233,6 +233,26 @@ test('划词翻译用词典式提示词，不沿用整页那套「只给译文�
   assert.equal(/Output the translation only/.test(system), false, '不该沿用整页的静默规则');
 });
 
+// 读音按源语言选记法，而且只给词和短语：整句标音标只会把译文挤得看不清
+test('划词释义第一行给读音，整句不加', async () => {
+  await reset();
+  let system = '';
+  global.fetch = async (url, init) => {
+    system = JSON.parse(init.body).messages[0].content;
+    return { ok: true, body: { getReader: () => ({ read: async () => ({ done: true }), cancel() {} }) } };
+  };
+
+  await TA.engine.translateStream('serendipity', { targetLang: 'zh-CN', onDelta() {} });
+
+  assert.match(system, /headword and its pronunciation, before any sense/, '读音应在释义之前');
+  assert.match(system, /IPA/, '英语等用国际音标');
+  assert.match(system, /British and American/, '英美读音不同时都给');
+  assert.match(system, /Pinyin with tone marks/, '汉语用带声调的拼音');
+  assert.match(system, /kana/, '日语用假名读音');
+  assert.match(system, /rather than guess/, '不确定时省略，不要编');
+  assert.match(system, /Do not add pronunciation to sentences/, '整句不加音标');
+});
+
 test('整页翻译仍然只要译文，不受划词提示词影响', async () => {
   await reset();
   let system = '';

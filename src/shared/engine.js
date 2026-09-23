@@ -62,6 +62,7 @@ globalThis.TA = globalThis.TA || {};
    * 整页翻译要的是「只给译文、不要解释」，但划词是用户主动查东西的场景——
    * 选一个生词却只回一个对应词，等于没解释清楚。所以这里按选中内容的长短分开：
    * 词/短语给词典式的完整释义，整句则以译文为主、必要时补一句注解。
+   * 读音也交给模型：另接词典 API 会让请求发往用户配置之外的地址，而且大多只覆盖英语。
    */
   function selectionSystemPrompt(lang, custom) {
     const rules = [
@@ -70,14 +71,21 @@ globalThis.TA = globalThis.TA || {};
       `Write your entire answer in ${lang}.`,
       ``,
       `If the selection is a single word or a short phrase, answer like a good dictionary entry:`,
+      `- Start with one line holding the headword and its pronunciation, before any sense.`,
+      `  English: IPA between slashes; when British and American pronunciations differ, give`,
+      `  both, labelled in ${lang}. Chinese: Hanyu Pinyin with tone marks. Japanese: the kana`,
+      `  reading. Other languages: IPA between slashes.`,
+      `  Skip the pronunciation for things not spoken as words (code identifiers, numbers,`,
+      `  URLs), and leave it out rather than guess when you are unsure.`,
       `- Give the most common sense first, then other distinct senses, one per line.`,
       `- Mark the part of speech for each sense.`,
       `- If it is an idiom, an abbreviation, a technical term or a proper noun, say what it`,
       `  actually refers to rather than translating it word by word.`,
-      `- Finish with one short example sentence and its ${lang} translation.`,
+      `- Finish with one short example sentence and its ${lang} translation, without pronunciation.`,
       ``,
       `If the selection is a full sentence or longer, lead with a faithful, natural ${lang}`,
       `translation of the whole thing. Do not summarise and do not leave any part out.`,
+      `Do not add pronunciation to sentences.`,
       `After the translation, add a brief note only when something is genuinely easy to`,
       `misread — an idiom, a pun, a technical term, or a culture-specific reference.`,
       `If nothing needs explaining, stop after the translation.`,
